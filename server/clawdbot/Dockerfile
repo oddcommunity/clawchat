@@ -35,8 +35,8 @@ COPY --from=base /app/package*.json ./
 COPY --from=base /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=base /usr/local/bin/claude /usr/local/bin/claude
 
-# Create data directory
-RUN mkdir -p /app/data /app/config
+# Create data directories (including crypto store for E2EE)
+RUN mkdir -p /data /data/crypto /app/config
 
 # Environment
 ENV NODE_ENV=production
@@ -49,7 +49,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # Run as non-root user
 RUN addgroup -g 1001 -S clawdbot && \
     adduser -S clawdbot -u 1001 -G clawdbot && \
-    chown -R clawdbot:clawdbot /app
+    chown -R clawdbot:clawdbot /app /data
 
 USER clawdbot
 
