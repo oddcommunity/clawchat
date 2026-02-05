@@ -1,0 +1,89 @@
+name: Scheduled Backup
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to backup'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  backup:
+    name: Backup Database & Media
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > kubeconfig
+          echo "KUBECONFIG=$(pwd)/kubeconfig" >> $GITHUB_ENV
+
+      - name: Create backup
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_NAME="clawchat-backup-${TIMESTAMP}"
+
+          # Backup PostgreSQL
+          kubectl exec -n clawchat deploy/postgres -- pg_dump \
+            -U synapse -d synapse --format=custom --compress=9 \
+            > "${BACKUP_NAME}-postgres.dump"
+
+          # Backup Synapse media (if small enough)
+          # For large media stores, use object storage directly
+          kubectl exec -n clawchat deploy/synapse -- tar -czf - /data/media_store 2>/dev/null \
+            > "${BACKUP_NAME}-media.tar.gz" || true
+
+          echo "BACKUP_NAME=${BACKUP_NAME}" >> $GITHUB_ENV
+
+      - name: Upload to S3
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Upload backup files
+        run: |
+          aws s3 cp "${BACKUP_NAME}-postgres.dump" \
+            "s3://${{ vars.BACKUP_BUCKET }}/clawchat/postgres/${BACKUP_NAME}.dump"
+
+          if [ -f "${BACKUP_NAME}-media.tar.gz" ]; then
+            aws s3 cp "${BACKUP_NAME}-media.tar.gz" \
+              "s3://${{ vars.BACKUP_BUCKET }}/clawchat/media/${BACKUP_NAME}.tar.gz"
+          fi
+
+      - name: Cleanup old backups
+        run: |
+          # Keep last 30 days of backups
+          aws s3 ls "s3://${{ vars.BACKUP_BUCKET }}/clawchat/postgres/" | \
+            while read -r line; do
+              BACKUP_DATE=$(echo $line | awk '{print $1}')
+              BACKUP_FILE=$(echo $line | awk '{print $4}')
+              if [[ $(date -d "$BACKUP_DATE" +%s) -lt $(date -d "30 days ago" +%s) ]]; then
+                aws s3 rm "s3://${{ vars.BACKUP_BUCKET }}/clawchat/postgres/${BACKUP_FILE}"
+              fi
+            done
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "⚠️ ClawChat backup failed! Check GitHub Actions for details."
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

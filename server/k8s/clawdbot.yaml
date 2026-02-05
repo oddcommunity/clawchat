@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clawdbot-data-pvc
+  namespace: clawchat
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clawdbot-config
+  namespace: clawchat
+data:
+  clawdbot.yaml: |
+    # Clawdbot Configuration for ClawChat
+
+    # Agent configuration
+    agent:
+      id: clawbot
+      name: ClawChat AI
+      model: claude-sonnet-4-20250514
+
+    # Matrix channel configuration
+    channels:
+      matrix:
+        enabled: true
+        homeserver: http://synapse:8008
+        # Bot credentials created via register_new_matrix_user
+        userId: "@clawbot:clawchat.io"
+
+    # Session storage (Redis for distributed)
+    sessions:
+      store: redis
+      redis:
+        host: redis
+        port: 6379
+
+    # Concurrency limits
+    limits:
+      main:
+        maxConcurrent: 100
+      subagent:
+        maxConcurrent: 200
+
+    # Memory configuration
+    memory:
+      enabled: true
+      vectorStore: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clawdbot
+  namespace: clawchat
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: clawdbot
+  template:
+    metadata:
+      labels:
+        app: clawdbot
+    spec:
+      containers:
+        - name: clawdbot
+          image: ghcr.io/your-org/clawdbot:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawchat-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clawchat-secrets
+                  key: REDIS_PASSWORD
+            - name: MATRIX_HOMESERVER
+              value: "http://synapse:8008"
+            - name: MATRIX_USER_ID
+              value: "@clawbot:clawchat.io"
+            - name: MATRIX_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: clawchat-secrets
+                  key: MATRIX_BOT_ACCESS_TOKEN
+                  optional: true
+            - name: NODE_ENV
+              value: production
+          volumeMounts:
+            - name: clawdbot-config
+              mountPath: /app/config
+            - name: clawdbot-data
+              mountPath: /app/data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: clawdbot-config
+          configMap:
+            name: clawdbot-config
+        - name: clawdbot-data
+          persistentVolumeClaim:
+            claimName: clawdbot-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clawdbot
+  namespace: clawchat
+spec:
+  selector:
+    app: clawdbot
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: clawdbot-hpa
+  namespace: clawchat
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: clawdbot
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60

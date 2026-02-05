@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+
+# Expo
+app/.expo/
+app/dist/
+app/web-build/
+
+# Native builds
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# Debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# Local env files
+.env
+.env*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+coverage/
+
+# EAS
+app/.eas/
+
+# Server data (Docker volumes)
+server/synapse-data/
+server/postgres-data/
+server/redis-data/
+server/clawdbot-data/
+server/clawdbot-workspace/
+server/backups/
+server/certs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Build outputs
+dist/
+build/

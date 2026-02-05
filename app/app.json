@@ -1,0 +1,83 @@
+{
+  "expo": {
+    "name": "ClawChat",
+    "slug": "clawchat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "io.clawchat.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "ClawChat needs camera access to take photos for sharing",
+        "NSPhotoLibraryUsageDescription": "ClawChat needs photo library access to share images",
+        "UIBackgroundModes": ["fetch", "remote-notification"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "io.clawchat.app",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ],
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow ClawChat to access your photos",
+          "cameraPermission": "Allow ClawChat to access your camera"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#007AFF",
+          "sounds": ["./assets/notification-sound.wav"],
+          "mode": "production"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "scheme": "clawchat",
+    "notification": {
+      "icon": "./assets/notification-icon.png",
+      "color": "#007AFF",
+      "iosDisplayInForeground": true,
+      "androidMode": "default",
+      "androidCollapsedTitle": "ClawChat"
+    },
+    "extra": {
+      "matrixHomeserver": "https://matrix.clawchat.io",
+      "eas": {
+        "projectId": "your-eas-project-id"
+      }
+    }
+  }
+}

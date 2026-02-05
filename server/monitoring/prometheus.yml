@@ -1,0 +1,47 @@
+# Prometheus Configuration for ClawChat
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Synapse Matrix homeserver
+  - job_name: 'synapse'
+    metrics_path: '/_synapse/metrics'
+    static_configs:
+      - targets: ['synapse:8008']
+    # If auth is required:
+    # bearer_token: 'your_metrics_token'
+
+  # Redis
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # PostgreSQL
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # Node exporter (host metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # ClawChat bot health
+  - job_name: 'clawdbot'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['clawdbot:3000']

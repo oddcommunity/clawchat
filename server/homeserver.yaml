@@ -1,0 +1,161 @@
+# =============================================================================
+# ClawChat Synapse Homeserver Configuration
+# =============================================================================
+# Documentation: https://matrix-org.github.io/synapse/latest/usage/configuration/
+
+server_name: "clawchat.io"  # CHANGE THIS to your domain
+
+# =============================================================================
+# Listeners
+# =============================================================================
+listeners:
+  - port: 8008
+    type: http
+    tls: false
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+        compress: false
+
+  # Metrics endpoint (optional, for monitoring)
+  - port: 9000
+    type: metrics
+    bind_addresses: ['0.0.0.0']
+
+# =============================================================================
+# Database
+# =============================================================================
+database:
+  name: psycopg2
+  args:
+    user: synapse
+    password: "${POSTGRES_PASSWORD}"
+    database: synapse
+    host: postgres
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+
+# =============================================================================
+# Redis (for caching and worker communication)
+# =============================================================================
+redis:
+  enabled: true
+  host: redis
+  port: 6379
+
+# =============================================================================
+# Registration & Authentication
+# =============================================================================
+
+# Disable public registration (users created via API or admin)
+enable_registration: false
+
+# Or enable with email verification
+# enable_registration: true
+# registrations_require_3pid:
+#   - email
+# enable_registration_captcha: true
+# recaptcha_public_key: "YOUR_RECAPTCHA_SITE_KEY"
+# recaptcha_private_key: "YOUR_RECAPTCHA_SECRET_KEY"
+
+# Registration shared secret (for admin user creation)
+registration_shared_secret: "${REGISTRATION_SHARED_SECRET}"
+
+# =============================================================================
+# Federation (DISABLED for private deployment)
+# =============================================================================
+# For a private AI chat service, disable federation
+federation_domain_whitelist: []
+allow_public_rooms_over_federation: false
+allow_public_rooms_without_auth: false
+
+# To enable federation, comment above and uncomment:
+# federation_domain_whitelist:
+#   - matrix.org
+#   - example.com
+
+# =============================================================================
+# Media Storage
+# =============================================================================
+media_store_path: /data/media_store
+max_upload_size: 50M
+max_image_pixels: 32M
+url_preview_enabled: true
+url_preview_ip_range_blacklist:
+  - '127.0.0.0/8'
+  - '10.0.0.0/8'
+  - '172.16.0.0/12'
+  - '192.168.0.0/16'
+
+# =============================================================================
+# Performance Tuning (for 10k users)
+# =============================================================================
+
+# Disable presence to reduce load
+use_presence: false
+
+# Event cache
+event_cache_size: 50K
+caches:
+  global_factor: 1.0
+  per_cache_factors:
+    get_users_in_room: 2.0
+    get_current_state_ids: 2.0
+
+# Rate limiting (relaxed for bot usage)
+rc_message:
+  per_second: 10
+  burst_count: 50
+
+rc_registration:
+  per_second: 0.5
+  burst_count: 5
+
+rc_login:
+  address:
+    per_second: 1
+    burst_count: 10
+  account:
+    per_second: 1
+    burst_count: 10
+
+# =============================================================================
+# Logging
+# =============================================================================
+log_config: "/data/log.config"
+
+# =============================================================================
+# Signing Keys
+# =============================================================================
+signing_key_path: "/data/signing.key"
+
+# =============================================================================
+# Trusted Key Servers (for key verification)
+# =============================================================================
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+# =============================================================================
+# App Services (for bridges, bots)
+# =============================================================================
+app_service_config_files: []
+# Add bridge configs here:
+# app_service_config_files:
+#   - /data/appservices/mautrix-signal.yaml
+
+# =============================================================================
+# Retention Policy
+# =============================================================================
+retention:
+  enabled: true
+  default_policy:
+    min_lifetime: 1d
+    max_lifetime: 365d
+  allowed_lifetime_min: 1d
+  allowed_lifetime_max: 365d
+  purge_jobs:
+    - longest_max_lifetime: 3d
+      interval: 12h
+    - shortest_max_lifetime: 3d
+      interval: 1d

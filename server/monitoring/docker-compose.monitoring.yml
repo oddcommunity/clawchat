@@ -1,0 +1,115 @@
+version: '3.8'
+
+# Monitoring stack for ClawChat
+# Run with: docker-compose -f docker-compose.yml -f monitoring/docker-compose.monitoring.yml up -d
+
+services:
+  # =============================================================================
+  # Prometheus - Metrics Collection
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: clawchat-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+
+  # =============================================================================
+  # Grafana - Visualization
+  # =============================================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: clawchat-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+  # =============================================================================
+  # Redis Exporter
+  # =============================================================================
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: clawchat-redis-exporter
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis:6379
+    depends_on:
+      - redis
+
+  # =============================================================================
+  # PostgreSQL Exporter
+  # =============================================================================
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: clawchat-postgres-exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=postgresql://synapse:${POSTGRES_PASSWORD:-changeme}@postgres:5432/synapse?sslmode=disable
+    depends_on:
+      - postgres
+
+  # =============================================================================
+  # Node Exporter - Host Metrics
+  # =============================================================================
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: clawchat-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+
+  # =============================================================================
+  # Loki - Log Aggregation
+  # =============================================================================
+  loki:
+    image: grafana/loki:latest
+    container_name: clawchat-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  # =============================================================================
+  # Promtail - Log Collector
+  # =============================================================================
+  promtail:
+    image: grafana/promtail:latest
+    container_name: clawchat-promtail
+    restart: unless-stopped
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:

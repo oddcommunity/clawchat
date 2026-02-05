@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: clawchat
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - postgres.yaml
+  - redis.yaml
+  - synapse.yaml
+  - clawdbot.yaml
+  - ingress.yaml
+
+# Common labels for all resources
+commonLabels:
+  app.kubernetes.io/part-of: clawchat
+  app.kubernetes.io/managed-by: kustomize
+
+# Image customization (update tags here)
+images:
+  - name: matrixdotorg/synapse
+    newTag: latest
+  - name: ghcr.io/your-org/clawdbot
+    newTag: latest

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clawchat-config
+  namespace: clawchat
+data:
+  DOMAIN: "clawchat.io"
+  SYNAPSE_SERVER_NAME: "clawchat.io"
+  SYNAPSE_REPORT_STATS: "no"
+  ENABLE_REGISTRATION: "false"
+  FEDERATION_ENABLED: "false"
