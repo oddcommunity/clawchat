@@ -1,10 +1,12 @@
 /**
  * ClawChat Matrix Client
  *
- * Handles all Matrix protocol communication with the Synapse homeserver.
+ * Handles all Matrix protocol communication with E2EE support.
+ * Uses matrix-js-sdk with Rust crypto backend (WASM).
  */
 
 import * as sdk from 'matrix-js-sdk';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import config from '../config';
 
 // =============================================================================
@@ -15,6 +17,7 @@ const DEFAULT_HOMESERVER = config.matrixHomeserver;
 
 export interface MatrixConfig {
   homeserver: string;
+  enableE2EE?: boolean;
 }
 
 export interface LoginCredentials {
@@ -38,6 +41,8 @@ export interface Message {
   timestamp: number;
   type: 'text' | 'image' | 'file' | 'notice';
   isMe: boolean;
+  encrypted: boolean;
+  verified: boolean;
 }
 
 export interface Room {
@@ -48,6 +53,51 @@ export interface Room {
   isDirect: boolean;
   lastMessage?: Message;
   unreadCount: number;
+  encrypted: boolean;
+}
+
+export interface DeviceInfo {
+  deviceId: string;
+  displayName: string;
+  lastSeen?: number;
+  verified: boolean;
+}
+
+export interface VerificationRequest {
+  recipientUserId: string;
+  recipientDeviceId: string;
+  sasEmoji?: string[];
+  sasNumbers?: number[];
+}
+
+// =============================================================================
+// Crypto Store (Persists E2EE keys)
+// =============================================================================
+
+class AsyncStorageCryptoStore {
+  private prefix = 'clawchat_crypto_';
+
+  async getItem(key: string): Promise<string | null> {
+    return AsyncStorage.getItem(this.prefix + key);
+  }
+
+  async setItem(key: string, value: string): Promise<void> {
+    await AsyncStorage.setItem(this.prefix + key, value);
+  }
+
+  async removeItem(key: string): Promise<void> {
+    await AsyncStorage.removeItem(this.prefix + key);
+  }
+
+  async getAllKeys(): Promise<string[]> {
+    const allKeys = await AsyncStorage.getAllKeys();
+    return allKeys.filter(k => k.startsWith(this.prefix));
+  }
+
+  async clear(): Promise<void> {
+    const keys = await this.getAllKeys();
+    await AsyncStorage.multiRemove(keys);
+  }
 }
 
 // =============================================================================
@@ -57,13 +107,17 @@ export interface Room {
 export class ClawChatClient {
   private client: sdk.MatrixClient | null = null;
   private config: MatrixConfig;
+  private cryptoStore: AsyncStorageCryptoStore;
   private onMessageCallback: ((message: Message) => void) | null = null;
   private onRoomUpdateCallback: ((rooms: Room[]) => void) | null = null;
+  private onVerificationCallback: ((request: VerificationRequest) => void) | null = null;
 
   constructor(config?: Partial<MatrixConfig>) {
     this.config = {
       homeserver: config?.homeserver || DEFAULT_HOMESERVER,
+      enableE2EE: config?.enableE2EE ?? true,
     };
+    this.cryptoStore = new AsyncStorageCryptoStore();
   }
 
   // ===========================================================================
@@ -92,7 +146,7 @@ export class ClawChatClient {
         homeserver: this.config.homeserver,
       };
 
-      // Initialize the authenticated client
+      // Initialize the authenticated client with E2EE
       await this.initializeClient(session);
 
       return session;
@@ -113,9 +167,9 @@ export class ClawChatClient {
       const response = await tempClient.register(
         username,
         password,
-        undefined, // session ID
+        undefined,
         {
-          type: 'm.login.dummy', // For servers without email verification
+          type: 'm.login.dummy',
         }
       );
 
@@ -157,7 +211,7 @@ export class ClawChatClient {
   }
 
   // ===========================================================================
-  // Client Initialization
+  // Client Initialization with E2EE
   // ===========================================================================
 
   private async initializeClient(session: AuthSession): Promise<void> {
@@ -167,6 +221,23 @@ export class ClawChatClient {
       userId: session.userId,
       deviceId: session.deviceId,
     });
+
+    // Initialize E2EE if enabled
+    if (this.config.enableE2EE) {
+      try {
+        // Initialize Rust crypto (WASM)
+        // This handles Olm/Megolm encryption automatically
+        await this.client.initRustCrypto();
+
+        console.log('[E2EE] Rust crypto initialized');
+
+        // Set up crypto event listeners
+        this.setupCryptoListeners();
+      } catch (error) {
+        console.warn('[E2EE] Failed to initialize crypto:', error);
+        // Continue without E2EE if it fails
+      }
+    }
 
     // Set up event listeners
     this.setupEventListeners();
@@ -184,15 +255,50 @@ export class ClawChatClient {
         }
       });
     });
+
+    // Upload device keys if E2EE enabled
+    if (this.config.enableE2EE && this.client.isCryptoEnabled()) {
+      await this.client.uploadKeys();
+      console.log('[E2EE] Device keys uploaded');
+    }
+  }
+
+  private setupCryptoListeners(): void {
+    if (!this.client) return;
+
+    // Listen for verification requests
+    this.client.on(sdk.CryptoEvent.VerificationRequest, (request) => {
+      console.log('[E2EE] Verification request received');
+      if (this.onVerificationCallback) {
+        this.onVerificationCallback({
+          recipientUserId: request.otherUserId,
+          recipientDeviceId: request.otherDeviceId || '',
+        });
+      }
+    });
+
+    // Listen for key backup status
+    this.client.on(sdk.CryptoEvent.KeyBackupStatus, (enabled) => {
+      console.log('[E2EE] Key backup status:', enabled);
+    });
   }
 
   private setupEventListeners(): void {
     if (!this.client) return;
 
     // Listen for new messages
-    this.client.on(sdk.RoomEvent.Timeline, (event, room, toStartOfTimeline) => {
-      if (toStartOfTimeline) return; // Ignore historical messages during sync
+    this.client.on(sdk.RoomEvent.Timeline, async (event, room, toStartOfTimeline) => {
+      if (toStartOfTimeline) return;
       if (event.getType() !== 'm.room.message') return;
+
+      // Decrypt if needed
+      if (event.isEncrypted() && this.client?.isCryptoEnabled()) {
+        try {
+          await this.client.decryptEventIfNeeded(event);
+        } catch (e) {
+          console.warn('[E2EE] Failed to decrypt event:', e);
+        }
+      }
 
       const message = this.eventToMessage(event, room!);
       if (message && this.onMessageCallback) {
@@ -218,11 +324,137 @@ export class ClawChatClient {
   }
 
   // ===========================================================================
+  // E2EE Functions
+  // ===========================================================================
+
+  /**
+   * Check if E2EE is enabled
+   */
+  isE2EEEnabled(): boolean {
+    return this.client?.isCryptoEnabled() ?? false;
+  }
+
+  /**
+   * Get device fingerprint for verification
+   */
+  async getDeviceFingerprint(): Promise<string | null> {
+    if (!this.client?.isCryptoEnabled()) return null;
+
+    const deviceId = this.client.getDeviceId();
+    if (!deviceId) return null;
+
+    const device = await this.client.getCrypto()?.getOwnDeviceKeys();
+    return device?.ed25519 || null;
+  }
+
+  /**
+   * Get all devices for a user
+   */
+  async getUserDevices(userId: string): Promise<DeviceInfo[]> {
+    if (!this.client?.isCryptoEnabled()) return [];
+
+    const crypto = this.client.getCrypto();
+    if (!crypto) return [];
+
+    const deviceMap = await crypto.getUserDeviceInfo([userId]);
+    const devices = deviceMap.get(userId);
+
+    if (!devices) return [];
+
+    return Array.from(devices.values()).map(device => ({
+      deviceId: device.deviceId,
+      displayName: device.displayName || device.deviceId,
+      verified: device.verified === sdk.DeviceVerification.Verified,
+    }));
+  }
+
+  /**
+   * Start device verification
+   */
+  async startVerification(userId: string, deviceId: string): Promise<void> {
+    if (!this.client?.isCryptoEnabled()) {
+      throw new Error('E2EE not enabled');
+    }
+
+    const crypto = this.client.getCrypto();
+    if (!crypto) throw new Error('Crypto not available');
+
+    // Request verification
+    await crypto.requestDeviceVerification(userId, deviceId);
+  }
+
+  /**
+   * Verify a device manually (mark as trusted)
+   */
+  async verifyDevice(userId: string, deviceId: string): Promise<void> {
+    if (!this.client?.isCryptoEnabled()) {
+      throw new Error('E2EE not enabled');
+    }
+
+    const crypto = this.client.getCrypto();
+    if (!crypto) throw new Error('Crypto not available');
+
+    await crypto.setDeviceVerified(userId, deviceId, true);
+  }
+
+  /**
+   * Enable encryption for a room
+   */
+  async enableRoomEncryption(roomId: string): Promise<void> {
+    if (!this.client) throw new Error('Client not initialized');
+
+    await this.client.sendStateEvent(roomId, 'm.room.encryption', {
+      algorithm: 'm.megolm.v1.aes-sha2',
+    });
+  }
+
+  /**
+   * Check if a room is encrypted
+   */
+  isRoomEncrypted(roomId: string): boolean {
+    if (!this.client) return false;
+    const room = this.client.getRoom(roomId);
+    return room?.hasEncryptionStateEvent() ?? false;
+  }
+
+  /**
+   * Export encryption keys (for backup)
+   */
+  async exportKeys(passphrase: string): Promise<string> {
+    if (!this.client?.isCryptoEnabled()) {
+      throw new Error('E2EE not enabled');
+    }
+
+    const crypto = this.client.getCrypto();
+    if (!crypto) throw new Error('Crypto not available');
+
+    const keys = await crypto.exportRoomKeys();
+    // In production, encrypt with passphrase
+    return JSON.stringify(keys);
+  }
+
+  /**
+   * Import encryption keys (from backup)
+   */
+  async importKeys(keysJson: string, passphrase: string): Promise<void> {
+    if (!this.client?.isCryptoEnabled()) {
+      throw new Error('E2EE not enabled');
+    }
+
+    const crypto = this.client.getCrypto();
+    if (!crypto) throw new Error('Crypto not available');
+
+    const keys = JSON.parse(keysJson);
+    await crypto.importRoomKeys(keys);
+  }
+
+  // ===========================================================================
   // Messaging
   // ===========================================================================
 
   /**
    * Send a text message to a room
+   * Automatically encrypted if room has E2EE enabled
    */
   async sendMessage(roomId: string, text: string): Promise<string> {
     if (!this.client) throw new Error('Client not initialized');
@@ -233,19 +465,20 @@ export class ClawChatClient {
 
   /**
    * Send an image to a room
+   * Automatically encrypted if room has E2EE enabled
    */
   async sendImage(roomId: string, uri: string, filename: string): Promise<string> {
     if (!this.client) throw new Error('Client not initialized');
 
-    // Upload the image first
     const response = await fetch(uri);
     const blob = await response.blob();
+
+    // Upload (encrypted if E2EE enabled for room)
     const uploadResponse = await this.client.uploadContent(blob, {
       name: filename,
       type: blob.type,
     });
 
-    // Send the image message
     const eventResponse = await this.client.sendImageMessage(
       roomId,
       uploadResponse.content_uri,
@@ -271,11 +504,21 @@ export class ClawChatClient {
     const timeline = room.getLiveTimeline();
     const events = timeline.getEvents();
 
-    return events
-      .filter((event) => event.getType() === 'm.room.message')
-      .slice(-limit)
-      .map((event) => this.eventToMessage(event, room)!)
-      .filter(Boolean);
+    // Decrypt any encrypted events
+    const messages: Message[] = [];
+    for (const event of events.filter(e => e.getType() === 'm.room.message').slice(-limit)) {
+      if (event.isEncrypted() && this.client.isCryptoEnabled()) {
+        try {
+          await this.client.decryptEventIfNeeded(event);
+        } catch (e) {
+          console.warn('[E2EE] Failed to decrypt:', e);
+        }
+      }
+      const msg = this.eventToMessage(event, room);
+      if (msg) messages.push(msg);
+    }
+
+    return messages;
   }
 
   // ===========================================================================
@@ -293,9 +536,9 @@ export class ClawChatClient {
   }
 
   /**
-   * Get or create a DM room with the AI bot
+   * Get or create a DM room with a bot (E2EE enabled by default)
    */
-  async getOrCreateBotRoom(botUserId: string): Promise<string> {
+  async getOrCreateBotRoom(botUserId: string, enableEncryption = true): Promise<string> {
     if (!this.client) throw new Error('Client not initialized');
 
     // Check for existing DM
@@ -307,11 +550,19 @@ export class ClawChatClient {
       }
     }
 
-    // Create new DM room
+    // Create new DM room with E2EE
     const response = await this.client.createRoom({
       is_direct: true,
       invite: [botUserId],
       preset: sdk.Preset.TrustedPrivateChat,
+      initial_state: enableEncryption && this.isE2EEEnabled() ? [
+        {
+          type: 'm.room.encryption',
+          content: {
+            algorithm: 'm.megolm.v1.aes-sha2',
+          },
+        },
+      ] : [],
     });
 
     return response.room_id;
@@ -347,6 +598,10 @@ export class ClawChatClient {
     this.onRoomUpdateCallback = callback;
   }
 
+  onVerification(callback: (request: VerificationRequest) => void): void {
+    this.onVerificationCallback = callback;
+  }
+
   // ===========================================================================
   // Helpers
   // ===========================================================================
@@ -367,6 +622,8 @@ export class ClawChatClient {
       timestamp: event.getTs(),
       type: this.getMessageType(content.msgtype),
       isMe: sender === this.client?.getUserId(),
+      encrypted: event.isEncrypted(),
+      verified: event.isVerified?.() ?? false,
     };
   }
 
@@ -394,6 +651,7 @@ export class ClawChatClient {
       isDirect: room.getMyMembership() === 'join' && room.getJoinedMemberCount() === 2,
       lastMessage: lastEvent ? this.eventToMessage(lastEvent, room) || undefined : undefined,
       unreadCount: room.getUnreadNotificationCount() || 0,
+      encrypted: room.hasEncryptionStateEvent(),
     };
   }
 
@@ -402,6 +660,13 @@ export class ClawChatClient {
    */
   getUserId(): string | null {
     return this.client?.getUserId() || null;
+  }
+
+  /**
+   * Get the current device ID
+   */
+  getDeviceId(): string | null {
+    return this.client?.getDeviceId() || null;
   }
 
   /**

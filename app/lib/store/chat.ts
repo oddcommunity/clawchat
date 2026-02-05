@@ -18,15 +18,18 @@ interface ChatState {
   isLoading: boolean;
   isSending: boolean;
   error: string | null;
+  e2eeEnabled: boolean;
 
   // Actions
   initialize: () => Promise<void>;
   setCurrentRoom: (roomId: string) => void;
+  setCurrentRoomId: (roomId: string | null) => void;
   loadMessages: (roomId: string) => Promise<void>;
   sendMessage: (text: string) => Promise<void>;
   sendImage: (uri: string, filename: string) => Promise<void>;
-  startBotChat: (botUserId: string) => Promise<string>;
+  startBotChat: (botUserId: string, enableE2EE?: boolean) => Promise<string>;
   refresh: () => void;
+  checkE2EEStatus: () => void;
 }
 
 // =============================================================================
@@ -40,6 +43,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoading: false,
   isSending: false,
   error: null,
+  e2eeEnabled: false,
 
   /**
    * Initialize chat and set up listeners
@@ -77,11 +81,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /**
-   * Set the current active room
+   * Set the current active room and load messages
    */
   setCurrentRoom: (roomId: string) => {
     set({ currentRoomId: roomId });
     get().loadMessages(roomId);
+  },
+
+  /**
+   * Set the current room ID without loading messages
+   */
+  setCurrentRoomId: (roomId: string | null) => {
+    set({ currentRoomId: roomId });
+  },
+
+  /**
+   * Check and update E2EE status
+   */
+  checkE2EEStatus: () => {
+    const client = getMatrixClient();
+    const enabled = client.isE2EEEnabled();
+    set({ e2eeEnabled: enabled });
   },
 
   /**
@@ -157,14 +177,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /**
-   * Start or get existing chat with the AI bot
+   * Start or get existing chat with a bot (E2EE enabled by default)
    */
-  startBotChat: async (botUserId: string) => {
+  startBotChat: async (botUserId: string, enableE2EE: boolean = true) => {
     try {
       set({ isLoading: true });
 
       const client = getMatrixClient();
-      const roomId = await client.getOrCreateBotRoom(botUserId);
+      const roomId = await client.getOrCreateBotRoom(botUserId, enableE2EE);
 
       // Refresh rooms list
       const rooms = client.getRooms();

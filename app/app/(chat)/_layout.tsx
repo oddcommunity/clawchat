@@ -10,6 +10,14 @@ export default function ChatLayout() {
         options={{
           title: 'ClawChat',
           headerLargeTitle: true,
+          headerLeft: () => (
+            <TouchableOpacity
+              onPress={() => router.push('/(chat)/bots')}
+              style={{ marginLeft: 8 }}
+            >
+              <Ionicons name="apps-outline" size={24} color="#007AFF" />
+            </TouchableOpacity>
+          ),
           headerRight: () => (
             <View style={{ flexDirection: 'row', gap: 16, marginRight: 8 }}>
               <TouchableOpacity onPress={() => router.push('/(chat)/search')}>
@@ -46,6 +54,19 @@ export default function ChatLayout() {
         name="profile"
         options={{
           title: 'Profile',
+        }}
+      />
+      <Stack.Screen
+        name="bots"
+        options={{
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="verify"
+        options={{
+          title: 'Verify Encryption',
+          presentation: 'modal',
         }}
       />
     </Stack>
