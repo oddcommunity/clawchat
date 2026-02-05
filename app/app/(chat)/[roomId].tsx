@@ -1,19 +1,20 @@
 /**
  * ClawChat Room Screen
  *
- * Individual chat room with the AI bot
+ * Individual chat room with E2EE indicators and bot info
  */
 
 import { useEffect, useCallback, useState } from 'react';
 import {
   View,
+  Text,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
   Alert,
 } from 'react-native';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, router } from 'expo-router';
 import {
   GiftedChat,
   IMessage,
@@ -22,12 +23,14 @@ import {
   Actions,
   Composer,
   Send,
+  Time,
 } from 'react-native-gifted-chat';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useChatStore, selectCurrentMessages, selectCurrentRoom } from '../../lib/store/chat';
 import { useAuthStore } from '../../lib/store/auth';
-import { Message } from '../../lib/matrix/client';
+import { Message, getMatrixClient } from '../../lib/matrix/client';
+import { getBotRegistry, BotInfo } from '../../lib/bots/registry';
 
 export default function RoomScreen() {
   const { roomId } = useLocalSearchParams<{ roomId: string }>();
@@ -39,12 +42,36 @@ export default function RoomScreen() {
   const session = useAuthStore((state) => state.session);
 
   const [giftedMessages, setGiftedMessages] = useState<IMessage[]>([]);
+  const [isEncrypted, setIsEncrypted] = useState(false);
+  const [botInfo, setBotInfo] = useState<BotInfo | null>(null);
 
   useEffect(() => {
     if (decodedRoomId) {
       setCurrentRoom(decodedRoomId);
+      checkEncryption();
+      detectBot();
     }
   }, [decodedRoomId]);
+
+  const checkEncryption = async () => {
+    const client = getMatrixClient();
+    const encrypted = client.isRoomEncrypted(decodedRoomId);
+    setIsEncrypted(encrypted);
+  };
+
+  const detectBot = async () => {
+    // Try to find bot info from room members
+    const registry = getBotRegistry();
+    await registry.initialize();
+
+    // Check if any room member is a known bot
+    if (currentRoom?.name) {
+      const bot = await registry.getBotByUserId(`@${currentRoom.name.toLowerCase()}:clawchat.io`);
+      if (bot) {
+        setBotInfo(bot);
+      }
+    }
+  };
 
   // Convert Matrix messages to GiftedChat format
   useEffect(() => {
@@ -118,23 +145,91 @@ export default function RoomScreen() {
     );
   }, [handlePickImage, handleTakePhoto]);
 
-  const renderBubble = (props: any) => (
-    <Bubble
+  const handleVerifyPress = () => {
+    // Get the other user in the room for verification
+    const otherUser = messages.find(m => m.sender !== session?.userId)?.sender;
+    if (otherUser) {
+      router.push(`/(chat)/verify?userId=${encodeURIComponent(otherUser)}`);
+    } else {
+      router.push('/(chat)/verify');
+    }
+  };
+
+  const renderHeaderRight = () => (
+    <View style={styles.headerRight}>
+      {isEncrypted && (
+        <TouchableOpacity onPress={handleVerifyPress} style={styles.headerButton}>
+          <Ionicons name="lock-closed" size={20} color="#34C759" />
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity style={styles.headerButton}>
+        <Ionicons name="ellipsis-horizontal" size={22} color="#007AFF" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderHeaderTitle = () => (
+    <View style={styles.headerTitle}>
+      <Text style={styles.headerTitleText} numberOfLines={1}>
+        {currentRoom?.name || 'Chat'}
+      </Text>
+      {isEncrypted && (
+        <View style={styles.encryptedBadge}>
+          <Ionicons name="lock-closed" size={10} color="#34C759" />
+          <Text style={styles.encryptedText}>Encrypted</Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const renderBubble = (props: any) => {
+    const message = props.currentMessage;
+    const isEncryptedMsg = message?.encrypted;
+
+    return (
+      <View>
+        <Bubble
+          {...props}
+          wrapperStyle={{
+            right: {
+              backgroundColor: '#007AFF',
+            },
+            left: {
+              backgroundColor: '#f0f0f0',
+            },
+          }}
+          textStyle={{
+            right: {
+              color: '#fff',
+            },
+            left: {
+              color: '#1a1a1a',
+            },
+          }}
+        />
+        {isEncryptedMsg && (
+          <View style={[
+            styles.encryptionIndicator,
+            props.position === 'right' ? styles.encryptionRight : styles.encryptionLeft
+          ]}>
+            <Ionicons name="lock-closed" size={10} color="#34C759" />
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderTime = (props: any) => (
+    <Time
       {...props}
-      wrapperStyle={{
+      timeTextStyle={{
         right: {
-          backgroundColor: '#007AFF',
+          color: 'rgba(255,255,255,0.7)',
+          fontSize: 11,
         },
         left: {
-          backgroundColor: '#f0f0f0',
-        },
-      }}
-      textStyle={{
-        right: {
-          color: '#fff',
-        },
-        left: {
-          color: '#1a1a1a',
+          color: '#999',
+          fontSize: 11,
         },
       }}
     />
@@ -160,12 +255,22 @@ export default function RoomScreen() {
   );
 
   const renderComposer = (props: any) => (
-    <Composer
-      {...props}
-      textInputStyle={styles.composer}
-      placeholder="Message..."
-      placeholderTextColor="#999"
-    />
+    <View style={styles.composerContainer}>
+      {isEncrypted && (
+        <View style={styles.composerLock}>
+          <Ionicons name="lock-closed" size={12} color="#34C759" />
+        </View>
+      )}
+      <Composer
+        {...props}
+        textInputStyle={[
+          styles.composer,
+          isEncrypted && styles.composerEncrypted
+        ]}
+        placeholder={isEncrypted ? "Encrypted message..." : "Message..."}
+        placeholderTextColor="#999"
+      />
+    </View>
   );
 
   const renderSend = (props: any) => (
@@ -180,11 +285,25 @@ export default function RoomScreen() {
     </Send>
   );
 
+  const renderFooter = () => {
+    if (!isEncrypted) return null;
+
+    return (
+      <View style={styles.footer}>
+        <Ionicons name="shield-checkmark" size={14} color="#34C759" />
+        <Text style={styles.footerText}>
+          Messages are end-to-end encrypted
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <>
       <Stack.Screen
         options={{
-          title: currentRoom?.name || 'Chat',
+          headerTitle: renderHeaderTitle,
+          headerRight: renderHeaderRight,
           headerBackTitle: 'Back',
         }}
       />
@@ -201,10 +320,12 @@ export default function RoomScreen() {
             name: session?.userId?.split(':')[0]?.replace('@', '') || 'You',
           }}
           renderBubble={renderBubble}
+          renderTime={renderTime}
           renderInputToolbar={renderInputToolbar}
           renderActions={renderActions}
           renderComposer={renderComposer}
           renderSend={renderSend}
+          renderFooter={renderFooter}
           alwaysShowSend
           isTyping={isSending}
           scrollToBottom
@@ -223,8 +344,13 @@ export default function RoomScreen() {
 // Helpers
 // =============================================================================
 
-function matrixToGiftedMessage(msg: Message, currentUserId: string): IMessage {
-  const baseMessage: IMessage = {
+interface ExtendedMessage extends IMessage {
+  encrypted?: boolean;
+  verified?: boolean;
+}
+
+function matrixToGiftedMessage(msg: Message, currentUserId: string): ExtendedMessage {
+  const baseMessage: ExtendedMessage = {
     _id: msg.id,
     text: msg.body,
     createdAt: new Date(msg.timestamp),
@@ -233,13 +359,15 @@ function matrixToGiftedMessage(msg: Message, currentUserId: string): IMessage {
       name: msg.senderName,
       avatar: msg.sender === currentUserId ? undefined : generateAvatarUrl(msg.sender),
     },
+    encrypted: msg.encrypted,
+    verified: msg.verified,
   };
 
   // Handle image messages
   if (msg.type === 'image') {
     return {
       ...baseMessage,
-      image: msg.body, // For images, body contains the URL
+      image: msg.body,
       text: '',
     };
   }
@@ -260,6 +388,43 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerButton: {
+    padding: 4,
+  },
+  headerTitle: {
+    alignItems: 'center',
+  },
+  headerTitleText: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  encryptedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 2,
+  },
+  encryptedText: {
+    fontSize: 10,
+    color: '#34C759',
+    fontWeight: '500',
+  },
+  encryptionIndicator: {
+    position: 'absolute',
+    bottom: 2,
+  },
+  encryptionRight: {
+    right: 8,
+  },
+  encryptionLeft: {
+    left: 8,
+  },
   inputToolbar: {
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
@@ -277,7 +442,18 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     marginBottom: 0,
   },
+  composerContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  composerLock: {
+    position: 'absolute',
+    left: 12,
+    zIndex: 1,
+  },
   composer: {
+    flex: 1,
     backgroundColor: '#f5f5f5',
     borderRadius: 20,
     paddingHorizontal: 12,
@@ -286,6 +462,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
     fontSize: 16,
     lineHeight: 20,
+  },
+  composerEncrypted: {
+    paddingLeft: 28,
   },
   sendContainer: {
     justifyContent: 'center',
@@ -313,5 +492,16 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    gap: 4,
+  },
+  footerText: {
+    fontSize: 12,
+    color: '#34C759',
   },
 });

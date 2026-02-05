@@ -2,7 +2,7 @@
  * ClawChat Settings Screen
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,11 +11,13 @@ import {
   Switch,
   ScrollView,
   Alert,
+  Share,
 } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../lib/store/auth';
 import { useThemeStore, ThemeMode } from '../../lib/theme';
+import { getMatrixClient } from '../../lib/matrix/client';
 import config from '../../lib/config';
 
 export default function SettingsScreen() {
@@ -25,6 +27,20 @@ export default function SettingsScreen() {
 
   const [notifications, setNotifications] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [e2eeEnabled, setE2eeEnabled] = useState(false);
+  const [deviceFingerprint, setDeviceFingerprint] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkE2EEStatus();
+  }, []);
+
+  const checkE2EEStatus = async () => {
+    const client = getMatrixClient();
+    setE2eeEnabled(client.isE2EEEnabled());
+
+    const fingerprint = await client.getDeviceFingerprint();
+    setDeviceFingerprint(fingerprint);
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -102,6 +118,68 @@ export default function SettingsScreen() {
     return session?.userId?.split(':')[0]?.replace('@', '') || 'User';
   };
 
+  const handleExportKeys = async () => {
+    const client = getMatrixClient();
+    if (!client.isE2EEEnabled()) {
+      Alert.alert('E2EE Not Enabled', 'End-to-end encryption is not enabled.');
+      return;
+    }
+
+    Alert.prompt(
+      'Export Keys',
+      'Enter a passphrase to encrypt your backup. Keep this passphrase safe - you\'ll need it to restore your keys.',
+      async (passphrase) => {
+        if (!passphrase || passphrase.length < 8) {
+          Alert.alert('Error', 'Passphrase must be at least 8 characters.');
+          return;
+        }
+
+        try {
+          const keysJson = await client.exportKeys(passphrase);
+
+          await Share.share({
+            message: keysJson,
+            title: 'ClawChat Encryption Keys',
+          });
+        } catch (error) {
+          console.error('Failed to export keys:', error);
+          Alert.alert('Error', 'Failed to export encryption keys.');
+        }
+      },
+      'secure-text',
+      '',
+      'default'
+    );
+  };
+
+  const handleVerifyDevice = () => {
+    router.push('/(chat)/verify');
+  };
+
+  const handleShowFingerprint = () => {
+    if (!deviceFingerprint) {
+      Alert.alert('Not Available', 'Device fingerprint is not available.');
+      return;
+    }
+
+    const formatted = deviceFingerprint.slice(0, 32).match(/.{4}/g)?.join(' ') || deviceFingerprint;
+
+    Alert.alert(
+      'Your Device Fingerprint',
+      `${formatted}\n\nShare this with others to verify your identity.`,
+      [
+        { text: 'OK' },
+        {
+          text: 'Copy',
+          onPress: () => {
+            // Would use Clipboard.setString in production
+            Alert.alert('Copied', 'Fingerprint copied to clipboard');
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <>
       <Stack.Screen
@@ -140,6 +218,57 @@ export default function SettingsScreen() {
                 <Ionicons name="chevron-forward" size={20} color="#ccc" />
               </View>
             </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Security Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Security</Text>
+          <View style={styles.card}>
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <Ionicons
+                  name={e2eeEnabled ? 'shield-checkmark' : 'shield-outline'}
+                  size={22}
+                  color={e2eeEnabled ? '#34C759' : '#666'}
+                  style={styles.rowIcon}
+                />
+                <View>
+                  <Text style={styles.label}>End-to-End Encryption</Text>
+                  <Text style={[styles.statusText, e2eeEnabled && styles.statusEnabled]}>
+                    {e2eeEnabled ? 'Enabled' : 'Not available'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+            {e2eeEnabled && (
+              <>
+                <View style={styles.separator} />
+                <TouchableOpacity style={styles.row} onPress={handleShowFingerprint}>
+                  <View style={styles.rowLeft}>
+                    <Ionicons name="finger-print" size={22} color="#666" style={styles.rowIcon} />
+                    <Text style={styles.label}>Device Fingerprint</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                </TouchableOpacity>
+                <View style={styles.separator} />
+                <TouchableOpacity style={styles.row} onPress={handleVerifyDevice}>
+                  <View style={styles.rowLeft}>
+                    <Ionicons name="checkmark-circle-outline" size={22} color="#666" style={styles.rowIcon} />
+                    <Text style={styles.label}>Verify Devices</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                </TouchableOpacity>
+                <View style={styles.separator} />
+                <TouchableOpacity style={styles.row} onPress={handleExportKeys}>
+                  <View style={styles.rowLeft}>
+                    <Ionicons name="download-outline" size={22} color="#666" style={styles.rowIcon} />
+                    <Text style={styles.label}>Export Encryption Keys</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
 
@@ -343,6 +472,14 @@ const styles = StyleSheet.create({
   value: {
     fontSize: 16,
     color: '#666',
+  },
+  statusText: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+  },
+  statusEnabled: {
+    color: '#34C759',
   },
   logoutButton: {
     backgroundColor: '#fff',

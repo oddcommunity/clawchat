@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "^4.0.0",
     "matrix-js-sdk": "^31.0.0",
     "dotenv": "^16.4.0"
   },
